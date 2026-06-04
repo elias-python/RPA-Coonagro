@@ -1,0 +1,32 @@
+# Dados operacionais — não versionar
+dados_rpa_coonagro.db
+nfs_lancadas.txt
+nfs_para_processar.txt
+$db
+
+# Arquivos Excel de dados (somente o .xlsm do projeto é versionado via vba/)
+Base_Dados_Coonagro.xlsx
+*.xlsx
+Automation Fospar v2.xlsm
+
+# Exportações geradas automaticamente
+Exportacoes/
+
+# Logs de runtime
+.__rpa_stderr.log
+.__rpa_stdout.log
+.__streamlit_stderr.log
+.__streamlit_stdout.log
+*.log
+
+# Cache Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Assets temporários
+assets/
+
+# Arquivos legados removidos do projeto
+app_painel.py
+fospar.py
