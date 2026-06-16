@@ -11,6 +11,7 @@ import sqlite3
 import sys
 import zipfile
 import xml.etree.ElementTree as ET
+from datetime import datetime, timedelta
 from copy import copy
 
 # Tenta importar openpyxl para a estética visual do Excel
@@ -211,6 +212,7 @@ if "SEU_USUARIO" in _cfg_pasta or not os.path.isdir(_cfg_pasta):
     _cfg_pasta = _auto_detectar_pasta()
 RETENCAO_XMLS_DIAS = _ler_int_config("retencao_xmls_dias", 7)
 INTERVALO_LIMPEZA_XML_SEGUNDOS = _ler_int_config("intervalo_limpeza_xml_segundos", 3600)
+JANELA_HISTORICO_DIAS = 7
 pasta_trabalho = (
     _cfg_pasta
     or r"C:\Users\esantan3\The Mosaic Company\Controladoria PGA1 (Arquivos) - RPA - Coonagro"
@@ -404,9 +406,8 @@ def _tentar_fechar_base_xlsm() -> bool:
                 nomes_suportados = tuple(
                     nome.lower() for nome in _nomes_xlsm_suportados()
                 )
-                assinatura_ok = (
-                    "rpa - coonagro" in caminho_wb_loose
-                    and any(nome in caminho_wb_loose for nome in nomes_suportados)
+                assinatura_ok = "rpa - coonagro" in caminho_wb_loose and any(
+                    nome in caminho_wb_loose for nome in nomes_suportados
                 )
 
                 # Regra de segurança: fecha somente quando o caminho completo casar.
@@ -446,33 +447,14 @@ def _tentar_fechar_base_xlsm() -> bool:
     return False
 
 
-def _contar_pendentes_lancamento():
-    """
-    Conta pendências reais para lançamento no SAP com base na planilha:
-    grupos (NF vinculada 5124, col K) que ainda estão sem cor na coluna A.
-    """
-    if not os.path.exists(caminho_excel):
-        return 0
-
+def _resumo_pendencias_tray() -> dict:
     try:
-        wb = openpyxl.load_workbook(caminho_excel, data_only=True, keep_vba=True)
-        ws = wb["Base"] if "Base" in wb.sheetnames else wb.active
-        grupos_pendentes = set()
-
-        for row in ws.iter_rows(min_row=3):
-            cel_a = row[0]
-            nf_a = str(cel_a.value).strip() if cel_a.value is not None else ""
-            nf_vinc = str(row[10].value).strip() if row[10].value is not None else ""
-            sem_cor = cel_a.fill is None or cel_a.fill.patternType is None
-
-            if nf_a and nf_vinc and sem_cor:
-                grupos_pendentes.add(nf_vinc)
-
-        wb.close()
-        return len(grupos_pendentes)
+        return _carregar_resumo_monitor(limit_historico=50)
     except Exception:
-        # Em caso de bloqueio/erro pontual, mantém o indicador legado da sessão.
-        return _notas_novas_global
+        return {
+            "grupos_pendentes": _notas_novas_global,
+            "ultima_extracao_pendente": "",
+        }
 
 
 def _notificar(titulo: str, msg: str):
@@ -486,10 +468,19 @@ def _notificar(titulo: str, msg: str):
 
 
 def _texto_pendentes_tray():
-    pend = _contar_pendentes_lancamento()
-    if pend > 0:
-        return f"{pend} grupo(s) pendente(s) para lançamento"
-    return "Nenhum grupo pendente para lançamento"
+    resumo = _resumo_pendencias_tray()
+    pend = int(resumo.get("grupos_pendentes") or 0)
+    if pend == 1:
+        return "Pendentes para lancamento: 1 nota"
+    return f"Pendentes para lancamento: {pend} notas"
+
+
+def _texto_extracao_pendente_tray():
+    resumo = _resumo_pendencias_tray()
+    data_extracao = _formatar_datahora_br(resumo.get("ultima_extracao_pendente") or "")
+    if data_extracao == "-":
+        return "Ultima extracao pendente: -"
+    return f"Ultima extracao pendente: {data_extracao}"
 
 
 def _log(msg):
@@ -990,6 +981,43 @@ def _formatar_datahora_br(valor: str) -> str:
     return txt or "-"
 
 
+def _parse_data_monitor(valor: str) -> datetime | None:
+    txt = str(valor or "").strip()
+    if not txt:
+        return None
+
+    candidatos = []
+    for candidato in (txt, txt[:19], txt[:16], txt[:10]):
+        candidato = candidato.strip()
+        if candidato and candidato not in candidatos:
+            candidatos.append(candidato)
+
+    formatos = (
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%d",
+        "%d/%m/%Y %H:%M",
+        "%d/%m/%Y",
+    )
+
+    for candidato in candidatos:
+        for formato in formatos:
+            try:
+                return datetime.strptime(candidato, formato)
+            except ValueError:
+                continue
+    return None
+
+
+def _esta_nos_ultimos_dias(valor: str, dias: int) -> bool:
+    referencia = _parse_data_monitor(valor)
+    if referencia is None:
+        return True
+
+    limite = (datetime.now() - timedelta(days=max(0, dias - 1))).date()
+    return referencia.date() >= limite
+
+
 def _abrir_base_xlsm():
     if os.path.exists(caminho_excel):
         os.startfile(caminho_excel)
@@ -1018,6 +1046,7 @@ def _carregar_resumo_monitor(limit_historico: int = 250) -> dict:
             chave: 0 for chave, _, _, _ in INDUSTRIALIZACAO_MONITOR_SPECS
         },
         "grupos_lancados_hoje_sem_tipo": 0,
+        "ultima_extracao_pendente": "",
         "historico": [],
     }
 
@@ -1149,8 +1178,16 @@ def _carregar_resumo_monitor(limit_historico: int = 250) -> dict:
                 status = "Pendente"
                 grupos_pendentes += 1
                 toneladas_pendentes += toneladas
+                if not resumo["ultima_extracao_pendente"] and data_importacao:
+                    resumo["ultima_extracao_pendente"] = data_importacao
 
             detalhes_nf = detalhes_por_nf.get(nf, [])
+            data_referencia_historico = data_importacao or emissao
+            if not _esta_nos_ultimos_dias(
+                data_referencia_historico, JANELA_HISTORICO_DIAS
+            ):
+                continue
+
             nfs_par = []
             for detalhe in detalhes_nf:
                 nf_par = detalhe.get("nf_par") or ""
@@ -1229,7 +1266,7 @@ class PainelMonitorXML:
         root = tk.Tk()
         self.root = root
         _aplicar_icone_tk(root)
-        root.title("RPA Coonagro | Monitor XML")
+        root.title("RPA Coonagro | Central Operacional Toll")
         root.geometry("1380x880")
         root.minsize(1120, 720)
         root.configure(bg="#f4f1e6")
@@ -1308,7 +1345,7 @@ class PainelMonitorXML:
 
         self.tk.Label(
             conteudo,
-            text="Central de XML e Lançamentos | Toll Coonagro",
+            text="Central Operacional de Lançamentos | Toll Coonagro",
             bg="#fcfdf9",
             fg="#173225",
             font=("Segoe UI Semibold", 24),
@@ -1317,7 +1354,7 @@ class PainelMonitorXML:
 
         self.tk.Label(
             conteudo,
-            text="Extração, tratamento e atualização automatizada de XMLs de industrialização - Toll da Coonagro.",
+            text="Monitoramento de notas de industrialização, com motor integrado para lançamento em Excel via SAP GUI.",
             bg="#fcfdf9",
             fg="#5d725f",
             font=("Segoe UI", 10),
@@ -1462,7 +1499,7 @@ class PainelMonitorXML:
         ).grid(row=0, column=0, sticky="w")
         self.tk.Label(
             topo_hist,
-            text="Selecione uma 5124 para abrir NF PAR, materiais e volumes vinculados.",
+            text=f"Histórico dos últimos {JANELA_HISTORICO_DIAS} dias. Selecione uma 5124 para abrir NF PAR, materiais e volumes vinculados.",
             bg="#fcfdf9",
             fg="#6e816a",
             font=("Segoe UI", 9),
@@ -1473,7 +1510,7 @@ class PainelMonitorXML:
         acoes_hist.grid(row=0, column=1, rowspan=2, sticky="e")
         self._label_history_meta = self.tk.Label(
             acoes_hist,
-            text="0 registros",
+            text=f"0 registros | {JANELA_HISTORICO_DIAS} dias",
             bg="#fcfdf9",
             fg="#6e816a",
             font=("Segoe UI", 10),
@@ -1751,7 +1788,7 @@ class PainelMonitorXML:
         canvas.create_text(
             84,
             54,
-            text="Monitor XML",
+            text="Painel Operacional",
             anchor="w",
             fill="#5d725f",
             font=("Segoe UI", 9),
@@ -2361,7 +2398,7 @@ class PainelMonitorXML:
 
             if self._label_history_meta is not None:
                 self._label_history_meta.configure(
-                    text=f"{len(resumo['historico'])} registros"
+                    text=f"{len(resumo['historico'])} registros | {JANELA_HISTORICO_DIAS} dias"
                 )
 
             selecionado_iid = self._details_current_iid
@@ -3260,12 +3297,12 @@ if __name__ == "__main__":
 
         menu = pystray.Menu(
             pystray.MenuItem(
-                lambda item: f"Status: {_status_global}  |  {_nf_count_global} NFs",
+                lambda item: _texto_pendentes_tray(),
                 None,
                 enabled=False,
             ),
             pystray.MenuItem(
-                lambda item: _texto_pendentes_tray(),
+                lambda item: _texto_extracao_pendente_tray(),
                 None,
                 enabled=False,
             ),

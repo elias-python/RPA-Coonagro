@@ -15,6 +15,12 @@ Private Const ARQUIVO_XLSX_LEGADO As String = "Base_Dados_Coonagro.xlsm"
 
 Public Const SHEET_PAINEL As String = "Painel"
 
+Private Function WorkbookEhBaseDados(ByVal nomeWorkbook As String) As Boolean
+    WorkbookEhBaseDados = _
+        (StrComp(Trim$(nomeWorkbook), ARQUIVO_XLSX, vbTextCompare) = 0) Or _
+        (StrComp(Trim$(nomeWorkbook), ARQUIVO_XLSX_LEGADO, vbTextCompare) = 0)
+End Function
+
 ' Retorna o caminho do Python lendo config.json na pasta do projeto.
 ' Fallback: tenta "python" no PATH do sistema.
 Private Function GetPythonExe() As String
@@ -70,17 +76,27 @@ Private Function GetPastaSP() As String
 End Function
 
 Private Function ResolverArquivoXlsx(ByVal pastaSharePoint As String) As String
-    If LenB(Dir$(pastaSharePoint & "\" & ARQUIVO_XLSX)) > 0 Then
+    On Error Resume Next
+    If LenB(Trim$(pastaSharePoint)) > 0 Then
+        If LenB(Dir$(pastaSharePoint & "\" & ARQUIVO_XLSX)) > 0 Then
+            ResolverArquivoXlsx = ARQUIVO_XLSX
+            On Error GoTo 0
+            Exit Function
+        End If
+
+        If LenB(Dir$(pastaSharePoint & "\" & ARQUIVO_XLSX_LEGADO)) > 0 Then
+            ResolverArquivoXlsx = ARQUIVO_XLSX_LEGADO
+            On Error GoTo 0
+            Exit Function
+        End If
+    End If
+    On Error GoTo 0
+
+    If WorkbookEhBaseDados(ThisWorkbook.Name) Then
+        ResolverArquivoXlsx = ThisWorkbook.Name
+    Else
         ResolverArquivoXlsx = ARQUIVO_XLSX
-        Exit Function
     End If
-
-    If LenB(Dir$(pastaSharePoint & "\" & ARQUIVO_XLSX_LEGADO)) > 0 Then
-        ResolverArquivoXlsx = ARQUIVO_XLSX_LEGADO
-        Exit Function
-    End If
-
-    ResolverArquivoXlsx = ARQUIVO_XLSX
 End Function
 
 ' ──────────────────────────────────────────────────────────
@@ -191,8 +207,6 @@ Public Sub BuscarNFsParaCockpit()
     Dim caminhoScript As String
     Dim nomeArquivoXlsx As String
 
-    nomeArquivoXlsx = ResolverArquivoXlsx(GetPastaSP())
-    caminhoXlsx = GetPastaSP() & "\" & nomeArquivoXlsx
     caminhoTxt = GetPastaRPA() & "\nfs_para_processar.txt"
     caminhoScript = GetPastaRPA() & "\force_cockpit.py"
 
@@ -203,22 +217,31 @@ Public Sub BuscarNFsParaCockpit()
     jaAberto = False
 
     Dim wbTmp As Workbook
-    For Each wbTmp In Application.Workbooks
-        If wbTmp.Name = nomeArquivoXlsx Then
-            Set wbBase = wbTmp
-            jaAberto = True
-            Exit For
-        End If
-    Next wbTmp
+    If WorkbookEhBaseDados(ThisWorkbook.Name) Then
+        Set wbBase = ThisWorkbook
+        jaAberto = True
+        nomeArquivoXlsx = ThisWorkbook.Name
+    Else
+        nomeArquivoXlsx = ResolverArquivoXlsx(GetPastaSP())
+        caminhoXlsx = GetPastaSP() & "\" & nomeArquivoXlsx
 
-    If Not jaAberto Then
-        If Dir(caminhoXlsx) = "" Then
-            MsgBox "Arquivo nao encontrado:" & vbCrLf & caminhoXlsx, vbExclamation, "Arquivo nao encontrado"
-            Exit Sub
+        For Each wbTmp In Application.Workbooks
+            If wbTmp.Name = nomeArquivoXlsx Then
+                Set wbBase = wbTmp
+                jaAberto = True
+                Exit For
+            End If
+        Next wbTmp
+
+        If Not jaAberto Then
+            If Dir(caminhoXlsx) = "" Then
+                MsgBox "Arquivo nao encontrado:" & vbCrLf & caminhoXlsx, vbExclamation, "Arquivo nao encontrado"
+                Exit Sub
+            End If
+            Application.ScreenUpdating = False
+            Set wbBase = Workbooks.Open(caminhoXlsx, ReadOnly:=True, UpdateLinks:=False)
+            Application.ScreenUpdating = True
         End If
-        Application.ScreenUpdating = False
-        Set wbBase = Workbooks.Open(caminhoXlsx, ReadOnly:=True, UpdateLinks:=False)
-        Application.ScreenUpdating = True
     End If
 
     On Error Resume Next

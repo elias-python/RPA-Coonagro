@@ -54,18 +54,34 @@ Private Type GrupoRange
     PedidoSAP As String
 End Type
 
+Private Function WorkbookEhBaseDados(ByVal nomeWorkbook As String) As Boolean
+    WorkbookEhBaseDados = _
+        (StrComp(Trim$(nomeWorkbook), NOME_DADOS, vbTextCompare) = 0) Or _
+        (StrComp(Trim$(nomeWorkbook), NOME_DADOS_LEGADO, vbTextCompare) = 0)
+End Function
+
 Private Function ResolverNomeDados(ByVal pastaBase As String) As String
-    If LenB(Dir$(pastaBase & "\" & NOME_DADOS)) > 0 Then
+    On Error Resume Next
+    If LenB(Trim$(pastaBase)) > 0 Then
+        If LenB(Dir$(pastaBase & "\" & NOME_DADOS)) > 0 Then
+            ResolverNomeDados = NOME_DADOS
+            On Error GoTo 0
+            Exit Function
+        End If
+
+        If LenB(Dir$(pastaBase & "\" & NOME_DADOS_LEGADO)) > 0 Then
+            ResolverNomeDados = NOME_DADOS_LEGADO
+            On Error GoTo 0
+            Exit Function
+        End If
+    End If
+    On Error GoTo 0
+
+    If WorkbookEhBaseDados(ThisWorkbook.Name) Then
+        ResolverNomeDados = ThisWorkbook.Name
+    Else
         ResolverNomeDados = NOME_DADOS
-        Exit Function
     End If
-
-    If LenB(Dir$(pastaBase & "\" & NOME_DADOS_LEGADO)) > 0 Then
-        ResolverNomeDados = NOME_DADOS_LEGADO
-        Exit Function
-    End If
-
-    ResolverNomeDados = NOME_DADOS
 End Function
 
 ' Cores de status na coluna A (conforme regra operacional)
@@ -133,21 +149,21 @@ Public Sub IniciarProcessamentoSAP()
     On Error GoTo TratarErroFatal
 
     ' Abre o arquivo de dados externo (gerado pelo XML Monitoring.py)
-    nomeArquivo = ResolverNomeDados(ThisWorkbook.Path)
-    caminhoArquivo = ThisWorkbook.Path & "\" & nomeArquivo
     abriuAgora = False
 
-    If StrComp(ThisWorkbook.Name, nomeArquivo, vbTextCompare) = 0 Then
+    If WorkbookEhBaseDados(ThisWorkbook.Name) Then
         Set wb = ThisWorkbook
+        nomeArquivo = ThisWorkbook.Name
     Else
+        nomeArquivo = ResolverNomeDados(ThisWorkbook.Path)
+        caminhoArquivo = ThisWorkbook.Path & "\" & nomeArquivo
         On Error Resume Next
         Set wb = Workbooks(nomeArquivo)
         On Error GoTo TratarErroFatal
-    End If
-
-    If wb Is Nothing Then
-        Set wb = Workbooks.Open(caminhoArquivo, ReadOnly:=False)
-        abriuAgora = Not wb Is Nothing
+        If wb Is Nothing Then
+            Set wb = Workbooks.Open(caminhoArquivo, ReadOnly:=False)
+            abriuAgora = Not wb Is Nothing
+        End If
     End If
     If wb Is Nothing Then
         MsgBox "Nao foi possivel abrir: " & caminhoArquivo, vbCritical
