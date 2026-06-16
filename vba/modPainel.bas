@@ -1,18 +1,59 @@
 Option Explicit
+Option Private Module
 
 ' ==============================
 ' PAINEL DE AUTOMACAO — Cockpit
 ' ==============================
 ' Botoes disponiveis na aba "Painel":
-'   [Processar Pendentes] — le Base_Dados_Coonagro.xlsm e exporta para o Python
+'   [Processar Pendentes] — le Base_Operacional_Toll_Coonagro.xlsm e exporta para o Python
 '                           somente grupos sem cor na coluna A.
 '   [Controle Base]       — prepara os controles no topo da aba Base.
 ' ======================================================
 
-Private Const ARQUIVO_XLSX As String = "Base_Dados_Coonagro.xlsm"
-Private Const PYTHON_EXE As String = "C:\Users\esantan3\AppData\Local\Programs\Python\Python314\python.exe"
+Private Const ARQUIVO_XLSX As String = "Base_Operacional_Toll_Coonagro.xlsm"
+Private Const ARQUIVO_XLSX_LEGADO As String = "Base_Dados_Coonagro.xlsm"
 
 Public Const SHEET_PAINEL As String = "Painel"
+
+' Retorna o caminho do Python lendo config.json na pasta do projeto.
+' Fallback: tenta "python" no PATH do sistema.
+Private Function GetPythonExe() As String
+    Dim cfg As String
+    Dim fso As Object
+    Dim ts As Object
+    Dim linha As String
+    Dim pasta As String
+
+    pasta = GetPastaRPA()
+    cfg = pasta & "\config.json"
+
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    If fso.FileExists(cfg) Then
+        Set ts = fso.OpenTextFile(cfg, 1, False)
+        Do While Not ts.AtEndOfStream
+            linha = Trim(ts.ReadLine)
+            ' Procura linha com "python_exe"
+            If InStr(1, linha, """python_exe""", vbTextCompare) > 0 Then
+                Dim p1 As Long, p2 As Long
+                p1 = InStr(linha, ": """) + 3
+                p2 = InStr(p1, linha, """")
+                If p1 > 3 And p2 > p1 Then
+                    GetPythonExe = Mid(linha, p1, p2 - p1)
+                    ts.Close
+                    Set ts = Nothing
+                    Set fso = Nothing
+                    Exit Function
+                End If
+            End If
+        Loop
+        ts.Close
+        Set ts = Nothing
+    End If
+    Set fso = Nothing
+
+    ' Fallback: "python" no PATH
+    GetPythonExe = "python"
+End Function
 
 ' Retorna a pasta do projeto RPA (OneDrive).
 ' Usa Chr(193)="A" com acento para evitar problema de encoding no .bas.
@@ -26,6 +67,20 @@ End Function
 ' Retorna a pasta do SharePoint onde o xlsm esta salvo.
 Private Function GetPastaSP() As String
     GetPastaSP = ThisWorkbook.Path
+End Function
+
+Private Function ResolverArquivoXlsx(ByVal pastaSharePoint As String) As String
+    If LenB(Dir$(pastaSharePoint & "\" & ARQUIVO_XLSX)) > 0 Then
+        ResolverArquivoXlsx = ARQUIVO_XLSX
+        Exit Function
+    End If
+
+    If LenB(Dir$(pastaSharePoint & "\" & ARQUIVO_XLSX_LEGADO)) > 0 Then
+        ResolverArquivoXlsx = ARQUIVO_XLSX_LEGADO
+        Exit Function
+    End If
+
+    ResolverArquivoXlsx = ARQUIVO_XLSX
 End Function
 
 ' ──────────────────────────────────────────────────────────
@@ -125,7 +180,7 @@ End Sub
 
 ' ──────────────────────────────────────────────────────────
 ' BUSCAR NFS PENDENTES NA BASE XLSM
-' Le Base_Dados_Coonagro.xlsm, agrupa por col K (NF Vinculada 5124)
+' Le Base_Operacional_Toll_Coonagro.xlsm, agrupa por col K (NF Vinculada 5124)
 ' e coleta grupos que possuem QUALQUER linha sem cor na coluna A.
 ' Calcula NF baixa (menor col A) e NF alta (maior col A) de cada grupo
 ' e grava "baixa|alta" por linha no txt para o Python.
@@ -134,8 +189,10 @@ Public Sub BuscarNFsParaCockpit()
     Dim caminhoXlsx As String
     Dim caminhoTxt As String
     Dim caminhoScript As String
+    Dim nomeArquivoXlsx As String
 
-    caminhoXlsx = GetPastaSP() & "\" & ARQUIVO_XLSX
+    nomeArquivoXlsx = ResolverArquivoXlsx(GetPastaSP())
+    caminhoXlsx = GetPastaSP() & "\" & nomeArquivoXlsx
     caminhoTxt = GetPastaRPA() & "\nfs_para_processar.txt"
     caminhoScript = GetPastaRPA() & "\force_cockpit.py"
 
@@ -147,7 +204,7 @@ Public Sub BuscarNFsParaCockpit()
 
     Dim wbTmp As Workbook
     For Each wbTmp In Application.Workbooks
-        If wbTmp.Name = ARQUIVO_XLSX Then
+        If wbTmp.Name = nomeArquivoXlsx Then
             Set wbBase = wbTmp
             jaAberto = True
             Exit For
@@ -170,7 +227,7 @@ Public Sub BuscarNFsParaCockpit()
 
     If wsBase Is Nothing Then
         If Not jaAberto Then wbBase.Close SaveChanges:=False
-        MsgBox "Aba 'Base' nao encontrada em " & ARQUIVO_XLSX, vbExclamation, "Aba nao encontrada"
+        MsgBox "Aba 'Base' nao encontrada em " & nomeArquivoXlsx, vbExclamation, "Aba nao encontrada"
         Exit Sub
     End If
 
@@ -263,12 +320,16 @@ ProximaLinha:
         ' Shell.Application.ShellExecute: suporte nativo a caminhos Unicode.
         Dim oSA As Object
         Set oSA = CreateObject("Shell.Application")
-        oSA.ShellExecute PYTHON_EXE, _
-            Chr(34) & caminhoScript & Chr(34), _
-            GetPastaRPA(), _
-            "open", 1
+        Dim exeCockpit As String
+        exeCockpit = GetPastaRPA() & "\force_cockpit.exe"
+        If Dir(exeCockpit) <> "" Then
+            oSA.ShellExecute exeCockpit, "", GetPastaRPA(), "open", 1
+        Else
+            ' Fallback: usa Python se o exe nao existir
+            oSA.ShellExecute GetPythonExe(), Chr(34) & caminhoScript & Chr(34), GetPastaRPA(), "open", 1
+        End If
         Set oSA = Nothing
-        MsgBox "force_cockpit.py iniciado!" & vbCrLf & "Acompanhe o terminal Python.", _
+        MsgBox "force_cockpit iniciado!" & vbCrLf & "Acompanhe o terminal Python.", _
                vbInformation, "Script lancado"
     End If
 End Sub
@@ -289,10 +350,14 @@ Public Sub ForcarAtualizacaoExcel()
 
     Dim oSA As Object
     Set oSA = CreateObject("Shell.Application")
-    oSA.ShellExecute PYTHON_EXE, _
-        Chr(34) & caminhoScript & Chr(34), _
-        GetPastaRPA(), _
-        "open", 1
+    Dim exeRecarregar As String
+    exeRecarregar = GetPastaRPA() & "\forcar_atualizacao.exe"
+    If Dir(exeRecarregar) <> "" Then
+        oSA.ShellExecute exeRecarregar, "", GetPastaRPA(), "open", 1
+    Else
+        ' Fallback: usa Python se o exe nao existir
+        oSA.ShellExecute GetPythonExe(), Chr(34) & caminhoScript & Chr(34), GetPastaRPA(), "open", 1
+    End If
     Set oSA = Nothing
 
     MsgBox "Reatualização iniciada!" & vbCrLf & _
@@ -363,66 +428,178 @@ End Sub
 
 ' ──────────────────────────────────────────────────────────
 ' EXPORTAR DADOS LANCADOS
-' Gera XLSX e PDF com os dados da aba Base (cores de status preservadas).
-' Arquivos nomeados com timestamp e salvos em "Exportacoes\" ao lado do xlsm.
+' Gera arquivos com os dados da aba Concluidos (cores de status preservadas).
+' Arquivos nomeados com timestamp e salvos em "Exportados\dd.mm.yy\".
 ' ──────────────────────────────────────────────────────────
 Public Sub ExportarDadosLancados()
-    Dim wb          As Workbook
-    Dim ws          As Worksheet
-    Dim wbNovo      As Workbook
-    Dim wsNova      As Worksheet
-    Dim s           As Shape
-    Dim sNova       As Shape
-    Dim pastaExport As String
-    Dim nomeBase    As String
+    Dim resp As VbMsgBoxResult
+
+    resp = MsgBox("Escolha o tipo de exportacao:" & vbNewLine & vbNewLine & _
+                  "Sim = Exportar Excel (.xlsx)" & vbNewLine & _
+                  "Nao = Exportar PDF (.pdf)" & vbNewLine & _
+                  "Cancelar = Sair", _
+                  vbYesNoCancel + vbQuestion, "Exportar Dados Lancados")
+
+    Select Case resp
+        Case vbYes
+            ExportarExcel
+        Case vbNo
+            ExportarPDF
+    End Select
+End Sub
+
+Public Sub ExportarExcel()
+    Dim ws As Worksheet
+    Dim nomeBase As String
     Dim caminhoXlsx As String
-    Dim caminhoPdf  As String
-    Dim stamp       As String
-    Dim ultimaLinha As Long
-    Dim ultimaCol   As Long
-    Dim resp        As VbMsgBoxResult
+    Dim pastaExport As String
 
-    Set wb = ThisWorkbook
-    On Error Resume Next
-    Set ws = wb.Worksheets("Base")
-    On Error GoTo 0
+    If Not PrepararContextoExportacao(ws, nomeBase) Then Exit Sub
 
-    If ws Is Nothing Then
-        MsgBox "Aba 'Base' nao encontrada.", vbExclamation
-        Exit Sub
-    End If
+    caminhoXlsx = EscolherCaminhoExportacao( _
+        nomeBase, _
+        "xlsx", _
+        "Salvar exportacao Excel", _
+        "Arquivo Excel (*.xlsx), *.xlsx" _
+    )
+    If Len(caminhoXlsx) = 0 Then Exit Sub
 
-    ' Nome base dos arquivos com timestamp
-    stamp       = Format(Now, "yyyymmdd_hhmmss")
-    nomeBase    = "Exportacao_Coonagro_" & stamp
-    ' Usa pasta local do projeto (evita URLs do SharePoint retornadas por wb.Path)
-    pastaExport = GetPastaRPA() & "\Exportacoes"
-    If Dir(pastaExport, vbDirectory) = "" Then MkDir pastaExport
-
-    caminhoXlsx = pastaExport & "\" & nomeBase & ".xlsx"
-    caminhoPdf  = pastaExport & "\" & nomeBase & ".pdf"
+    pastaExport = ObterPastaArquivo(caminhoXlsx)
 
     Application.ScreenUpdating = False
+    If ExportarBaseComoXlsx(ws, caminhoXlsx) Then
+        MostrarResumoExportacao "Exportacao Excel concluida!", _
+            "XLSX: " & caminhoXlsx, _
+            pastaExport, "Exportar Excel"
+    End If
+    Application.ScreenUpdating = True
+End Sub
 
-    ' ================================================================
-    ' XLSX — copia da aba Base sem shapes do painel
-    ' ================================================================
-    ws.Copy   ' cria novo workbook com a copia
+Public Sub ExportarPDF()
+    Dim ws As Worksheet
+    Dim nomeBase As String
+    Dim caminhoPdf As String
+    Dim pastaExport As String
+
+    If Not PrepararContextoExportacao(ws, nomeBase) Then Exit Sub
+
+    caminhoPdf = EscolherCaminhoExportacao( _
+        nomeBase, _
+        "pdf", _
+        "Salvar exportacao PDF", _
+        "Arquivo PDF (*.pdf), *.pdf" _
+    )
+    If Len(caminhoPdf) = 0 Then Exit Sub
+
+    pastaExport = ObterPastaArquivo(caminhoPdf)
+
+    Application.ScreenUpdating = False
+    If ExportarBaseComoPDF(ws, caminhoPdf) Then
+        MostrarResumoExportacao "Exportacao PDF concluida!", _
+            "PDF: " & caminhoPdf, _
+            pastaExport, "Exportar PDF"
+    End If
+    Application.ScreenUpdating = True
+End Sub
+
+Private Function PrepararContextoExportacao(ByRef ws As Worksheet, ByRef nomeBase As String) As Boolean
+    Set ws = GetWorksheetParaExportacao()
+
+    If ws Is Nothing Then
+        MsgBox "Use a aba Concluidos para exportar os grupos finalizados.", vbExclamation
+        Exit Function
+    End If
+
+    nomeBase = "Exportacao_Coonagro_" & NomeAbaParaArquivo(ws.Name) & "_" & Format(Now, "yyyymmdd_hhmmss")
+    PrepararContextoExportacao = True
+End Function
+
+Private Function GetWorksheetParaExportacao() As Worksheet
+    Dim wsAtiva As Worksheet
+
+    On Error Resume Next
+    Set wsAtiva = ActiveSheet
+    On Error GoTo 0
+
+    If Not wsAtiva Is Nothing Then
+        If EhAbaExportavel(wsAtiva.Name) Then
+            Set GetWorksheetParaExportacao = wsAtiva
+            Exit Function
+        End If
+    End If
+
+    On Error Resume Next
+    Set GetWorksheetParaExportacao = ThisWorkbook.Worksheets(NomeAbaConcluidosExport())
+    On Error GoTo 0
+End Function
+
+Private Function EhAbaExportavel(ByVal nomeAba As String) As Boolean
+    EhAbaExportavel = (StrComp(nomeAba, NomeAbaConcluidosExport(), vbTextCompare) = 0)
+End Function
+
+Private Function NomeAbaConcluidosExport() As String
+    NomeAbaConcluidosExport = "Conclu" & ChrW(237) & "dos"
+End Function
+
+Private Function NomeAbaParaArquivo(ByVal nomeAba As String) As String
+    If StrComp(nomeAba, NomeAbaConcluidosExport(), vbTextCompare) = 0 Then
+        NomeAbaParaArquivo = "Concluidos"
+    Else
+        NomeAbaParaArquivo = Replace(nomeAba, " ", "_")
+    End If
+End Function
+
+Private Function EscolherCaminhoExportacao(ByVal nomeBase As String, ByVal extensao As String, ByVal titulo As String, ByVal filtro As String) As String
+    Dim caminhoSelecionado As Variant
+    Dim sugestao As String
+
+    sugestao = GetPastaSP() & "\" & nomeBase & "." & extensao
+    caminhoSelecionado = Application.GetSaveAsFilename( _
+        InitialFileName:=sugestao, _
+        FileFilter:=filtro, _
+        Title:=titulo _
+    )
+
+    If VarType(caminhoSelecionado) = vbBoolean Then Exit Function
+
+    EscolherCaminhoExportacao = CStr(caminhoSelecionado)
+    If LCase$(Right$(EscolherCaminhoExportacao, Len(extensao) + 1)) <> "." & LCase$(extensao) Then
+        EscolherCaminhoExportacao = EscolherCaminhoExportacao & "." & extensao
+    End If
+End Function
+
+Private Function ObterPastaArquivo(ByVal caminhoArquivo As String) As String
+    Dim posBarra As Long
+
+    posBarra = InStrRev(caminhoArquivo, "\")
+    If posBarra > 0 Then
+        ObterPastaArquivo = Left$(caminhoArquivo, posBarra - 1)
+    Else
+        ObterPastaArquivo = GetPastaSP()
+    End If
+End Function
+
+Private Function ExportarBaseComoXlsx(ByVal ws As Worksheet, ByVal caminhoXlsx As String) As Boolean
+    Dim wbNovo As Workbook
+    Dim wsNova As Worksheet
+    Dim shp As Shape
+
+    On Error GoTo TrataErro
+
+    ws.Copy
     Set wbNovo = ActiveWorkbook
     Set wsNova = wbNovo.Worksheets(1)
 
-    ' Remove shapes (botoes do painel — nao pertencem ao relatorio)
-    For Each sNova In wsNova.Shapes
-        sNova.Delete
-    Next sNova
+    For Each shp In wsNova.Shapes
+        shp.Delete
+    Next shp
 
-    ' Configura pagina do relatorio
     With wsNova.PageSetup
-        .Orientation   = xlLandscape
-        .PaperSize     = xlPaperA4
+        .Orientation = xlLandscape
+        .PaperSize = xlPaperA4
         .FitToPagesWide = 1
         .FitToPagesTall = False
-        .Zoom          = False
+        .Zoom = False
     End With
 
     Application.DisplayAlerts = False
@@ -430,24 +607,38 @@ Public Sub ExportarDadosLancados()
     wbNovo.Close SaveChanges:=False
     Application.DisplayAlerts = True
 
-    ' ================================================================
-    ' PDF — aba Base com shapes do painel ocultos durante exportacao
-    ' ================================================================
-    ultimaLinha = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
-    ultimaCol   = ws.UsedRange.Column + ws.UsedRange.Columns.Count - 1
+    ExportarBaseComoXlsx = True
+    Exit Function
 
-    ' Oculta shapes ctl_* para nao aparecerem no PDF
-    For Each s In ws.Shapes
-        If Left$(s.Name, 4) = "ctl_" Then s.Visible = msoFalse
-    Next s
+TrataErro:
+    Application.DisplayAlerts = True
+    On Error Resume Next
+    If Not wbNovo Is Nothing Then wbNovo.Close SaveChanges:=False
+    On Error GoTo 0
+    MsgBox "Falha ao exportar Excel: " & Err.Description, vbExclamation, "Exportar Excel"
+End Function
+
+Private Function ExportarBaseComoPDF(ByVal ws As Worksheet, ByVal caminhoPdf As String) As Boolean
+    Dim shp As Shape
+    Dim ultimaLinha As Long
+    Dim ultimaCol As Long
+
+    On Error GoTo TrataErro
+
+    ultimaLinha = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+    ultimaCol = ws.UsedRange.Column + ws.UsedRange.Columns.Count - 1
+
+    For Each shp In ws.Shapes
+        If Left$(shp.Name, 4) = "ctl_" Then shp.Visible = msoFalse
+    Next shp
 
     With ws.PageSetup
-        .PrintArea      = ws.Range(ws.Cells(1, 1), ws.Cells(ultimaLinha, ultimaCol)).Address
-        .Orientation    = xlLandscape
-        .PaperSize      = xlPaperA4
+        .PrintArea = ws.Range(ws.Cells(1, 1), ws.Cells(ultimaLinha, ultimaCol)).Address
+        .Orientation = xlLandscape
+        .PaperSize = xlPaperA4
         .FitToPagesWide = 1
         .FitToPagesTall = False
-        .Zoom           = False
+        .Zoom = False
     End With
 
     ws.ExportAsFixedFormat Type:=xlTypePDF, _
@@ -457,98 +648,32 @@ Public Sub ExportarDadosLancados()
         IgnorePrintAreas:=False, _
         OpenAfterPublish:=False
 
-    ' Restaura shapes e limpa area de impressao
-    For Each s In ws.Shapes
-        If Left$(s.Name, 4) = "ctl_" Then s.Visible = msoTrue
-    Next s
+    ExportarBaseComoPDF = True
+
+TrataSaida:
+    On Error Resume Next
+    For Each shp In ws.Shapes
+        If Left$(shp.Name, 4) = "ctl_" Then shp.Visible = msoTrue
+    Next shp
     ws.PageSetup.PrintArea = ""
+    On Error GoTo 0
+    Exit Function
 
-    Application.ScreenUpdating = True
+TrataErro:
+    MsgBox "Falha ao exportar PDF: " & Err.Description, vbExclamation, "Exportar PDF"
+    GoTo TrataSaida
+End Function
 
-    ' Pergunta se deseja abrir a pasta
-    resp = MsgBox("Exportacao concluida!" & vbNewLine & vbNewLine & _
-                  "XLSX: " & caminhoXlsx & vbNewLine & _
-                  "PDF : " & caminhoPdf & vbNewLine & vbNewLine & _
-                  "Deseja abrir a pasta de exportacoes?", _
-                  vbYesNo + vbInformation, "Exportar Dados Lancados")
+Private Sub MostrarResumoExportacao(ByVal titulo As String, ByVal detalhe As String, ByVal pastaExport As String, ByVal tituloMsg As String)
+    Dim resp As VbMsgBoxResult
+
+    resp = MsgBox(titulo & vbNewLine & vbNewLine & _
+                  detalhe & vbNewLine & vbNewLine & _
+                  "Deseja abrir a pasta do arquivo?", _
+                  vbYesNo + vbInformation, tituloMsg)
 
     If resp = vbYes Then
         Shell "explorer.exe " & Chr(34) & pastaExport & Chr(34), vbNormalFocus
-    End If
-
-    ' ================================================================
-    ' LIMPEZA — remove linhas VERDE (Concluidas) da planilha Base
-    ' ================================================================
-    Dim totalVerdes As Long
-    Dim r As Long
-    totalVerdes = 0
-
-    ' Conta quantas linhas VERDE existem (de baixo para cima para nao deslocar indice)
-    For r = ultimaLinha To 3 Step -1
-        With ws.Cells(r, 1)
-            If .Interior.Pattern <> xlPatternNone And _
-               .Interior.Color = RGB(102, 187, 106) Then
-                totalVerdes = totalVerdes + 1
-            End If
-        End With
-    Next r
-
-    If totalVerdes > 0 Then
-        Dim respLimpar As VbMsgBoxResult
-        respLimpar = MsgBox(totalVerdes & " linha(s) VERDE (Concluidas) encontradas na planilha." & vbNewLine & vbNewLine & _
-                            "Deseja remove-las agora? Os dados ja foram salvos no arquivo exportado.", _
-                            vbYesNo + vbQuestion, "Limpar dados exportados")
-
-        If respLimpar = vbYes Then
-            Application.ScreenUpdating = False
-
-            ' Registra NFs lancadas no arquivo de exclusao ANTES de deletar as linhas
-            Dim caminhoLancadas As String
-            Dim dicNFLanc As Object
-            Dim rScan As Long
-            Dim nfLanc As String
-            Dim chaveLanc As Variant
-            caminhoLancadas = GetPastaRPA() & "\nfs_lancadas.txt"
-            Set dicNFLanc = CreateObject("Scripting.Dictionary")
-            dicNFLanc.CompareMode = vbTextCompare
-            For rScan = 3 To ultimaLinha
-                With ws.Cells(rScan, 1)
-                    If .Interior.Pattern <> xlPatternNone And _
-                       .Interior.Color = RGB(102, 187, 106) Then
-                        nfLanc = Trim$(CStr(.Value))
-                        If Len(nfLanc) > 0 And Not dicNFLanc.Exists(nfLanc) Then
-                            dicNFLanc.Add nfLanc, 1
-                        End If
-                    End If
-                End With
-            Next rScan
-            If dicNFLanc.Count > 0 Then
-                Dim fnLanc As Integer
-                fnLanc = FreeFile
-                Open caminhoLancadas For Append As #fnLanc
-                For Each chaveLanc In dicNFLanc.Keys
-                    Print #fnLanc, chaveLanc
-                Next chaveLanc
-                Close #fnLanc
-            End If
-            Set dicNFLanc = Nothing
-
-            Dim totalDeletadas As Long
-            totalDeletadas = 0
-            For r = ultimaLinha To 3 Step -1
-                With ws.Cells(r, 1)
-                    If .Interior.Pattern <> xlPatternNone And _
-                       .Interior.Color = RGB(102, 187, 106) Then
-                        ws.Rows(r).Delete
-                        totalDeletadas = totalDeletadas + 1
-                    End If
-                End With
-            Next r
-            ws.Parent.Save
-            AtualizarDashboard
-            Application.ScreenUpdating = True
-            MsgBox totalDeletadas & " linha(s) removidas. Planilha salva.", vbInformation, "Limpeza concluida"
-        End If
     End If
 End Sub
 

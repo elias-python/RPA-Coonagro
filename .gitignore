@@ -2,15 +2,23 @@
 dados_rpa_coonagro.db
 nfs_lancadas.txt
 nfs_para_processar.txt
+config.json
+aviso_primeiro_uso_outlook.txt
 $db
 
 # Arquivos Excel de dados (somente o .xlsm do projeto é versionado via vba/)
 Base_Dados_Coonagro.xlsx
+Base_Dados_Coonagro.xlsm
+Base_Operacional_Toll_Coonagro.xlsm
 *.xlsx
 Automation Fospar v2.xlsm
 
 # Exportações geradas automaticamente
 Exportacoes/
+build/
+dist/
+release/
+*.zip
 
 # Logs de runtime
 .__rpa_stderr.log
@@ -18,14 +26,22 @@ Exportacoes/
 .__streamlit_stderr.log
 .__streamlit_stdout.log
 *.log
+build_atualiza_log.txt
+build_log.txt
+build_monitor_log.txt
 
 # Cache Python
 __pycache__/
 *.pyc
 *.pyo
 
-# Assets temporários
-assets/
+# Estado local do extrator
+status_dia_*.txt
+xmls_pendentes_recarregar.txt
+outlook_rebusca_processados.txt
+
+# Artefatos auxiliares gerados localmente
+Apresentacao_RPA_Coonagro.pptx
 
 # Arquivos legados removidos do projeto
 app_painel.py

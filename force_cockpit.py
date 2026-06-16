@@ -32,15 +32,95 @@ if hasattr(sys.stdout, "buffer"):
 from openpyxl.styles import PatternFill, Font
 from PIL import ImageGrab, Image
 
+
 # ─────────────────────────────────────────────
 # CONFIGURAÇÕES
 # ─────────────────────────────────────────────
-pasta_trabalho = r"C:\Users\esantan3\The Mosaic Company\Controladoria PGA1 (Arquivos) - RPA - Coonagro"
-caminho_db = os.path.join(pasta_trabalho, "dados_rpa_coonagro.db")
-CAMINHO_XLSX = os.path.join(pasta_trabalho, "Base_Dados_Coonagro.xlsm")
+def _auto_detectar_pasta() -> str:
+    base = os.path.join(os.environ.get("USERPROFILE", ""), "The Mosaic Company")
+    candidato = os.path.join(base, "Controladoria PGA1 (Arquivos) - RPA - Coonagro")
+    if os.path.isdir(candidato):
+        return candidato
+    if os.path.isdir(base):
+        for sub in os.listdir(base):
+            if "RPA - Coonagro" in sub and os.path.isdir(os.path.join(base, sub)):
+                return os.path.join(base, sub)
+    return ""
+
+
+def _ler_config_cockpit() -> dict:
+    import json
+
+    _dir = (
+        os.path.dirname(sys.executable)
+        if getattr(sys, "frozen", False)
+        else os.path.dirname(os.path.abspath(__file__))
+    )
+    cfg = os.path.join(_dir, "config.json")
+    if os.path.exists(cfg):
+        try:
+            with open(cfg, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+
+def _pasta_runtime_compartilhada() -> str:
+    pasta = os.path.join(pasta_trabalho, "system")
+    os.makedirs(pasta, exist_ok=True)
+    return pasta
+
+
+def _resolver_arquivo_compartilhado(nome_arquivo: str) -> str:
+    caminho_novo = os.path.join(_pasta_runtime_compartilhada(), nome_arquivo)
+    caminho_legado = os.path.join(pasta_trabalho, nome_arquivo)
+
+    if os.path.exists(caminho_novo):
+        return caminho_novo
+
+    if os.path.exists(caminho_legado):
+        try:
+            os.replace(caminho_legado, caminho_novo)
+            return caminho_novo
+        except Exception:
+            return caminho_legado
+
+    return caminho_novo
+
+
+_cfg_c = _ler_config_cockpit()
+_cfg_pasta = _cfg_c.get("pasta_trabalho", "")
+if "SEU_USUARIO" in _cfg_pasta or not os.path.isdir(_cfg_pasta):
+    _cfg_pasta = _auto_detectar_pasta()
+pasta_trabalho = (
+    _cfg_pasta
+    or r"C:\Users\esantan3\The Mosaic Company\Controladoria PGA1 (Arquivos) - RPA - Coonagro"
+)
+caminho_db = _resolver_arquivo_compartilhado("dados_rpa_coonagro.db")
+NOME_XLSX_PREFERIDO = "Base_Operacional_Toll_Coonagro.xlsm"
+NOME_XLSX_LEGADO = "Base_Dados_Coonagro.xlsm"
+
+
+def _resolver_caminho_xlsx() -> str:
+    for nome in (NOME_XLSX_PREFERIDO, NOME_XLSX_LEGADO):
+        caminho = os.path.join(pasta_trabalho, nome)
+        if os.path.exists(caminho):
+            return caminho
+    return os.path.join(pasta_trabalho, NOME_XLSX_PREFERIDO)
+
+
+CAMINHO_XLSX = _resolver_caminho_xlsx()
 # Arquivo fixo onde o usuário cola os números das NFs a processar (um por linha)
 # Se vazio ou inexistente, o script usa o banco de dados como fonte.
-NFS_LISTA_FIXA = os.path.join(os.path.dirname(__file__), "nfs_para_processar.txt")
+NFS_LISTA_FIXA = os.path.join(
+    (
+        os.path.dirname(sys.executable)
+        if getattr(sys, "frozen", False)
+        else os.path.dirname(os.path.abspath(__file__))
+    ),
+    "nfs_para_processar.txt",
+)
 URL_COCKPIT = (
     "https://mosaic-prod.launchpad.cfapps.us10.hana.ondemand.com/site"
     "?siteId=87162a1d-444e-470f-8041-baaa1f98242d"
@@ -50,7 +130,14 @@ URL_COCKPIT = (
 )
 
 # Pasta onde ficam os screenshots dos elementos da UI
-PASTA_ASSETS = os.path.join(os.path.dirname(__file__), "assets")
+PASTA_ASSETS = os.path.join(
+    (
+        os.path.dirname(sys.executable)
+        if getattr(sys, "frozen", False)
+        else os.path.dirname(os.path.abspath(__file__))
+    ),
+    "assets",
+)
 os.makedirs(PASTA_ASSETS, exist_ok=True)
 
 # ─ Cores de status na coluna A (ARGB hex para openpyxl) ─────────────────────

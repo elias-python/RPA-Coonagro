@@ -1,0 +1,68 @@
+=======================================================
+  RPA Coonagro - Guia do Usuario do Extrator XML
+=======================================================
+
+O QUE E
+-------
+Este extrator monitora os XMLs recebidos da Coonagro, salva os anexos,
+atualiza a base compartilhada e alimenta o painel operacional do processo.
+
+O QUE ELE FAZ
+-------------
+- Procura no Outlook a pasta com o nome exato XML Coonagro.
+- Baixa para a pasta compartilhada os XMLs encontrados nos e-mails.
+- Valida e grava os dados no banco do processo.
+- Atualiza automaticamente a Base_Operacional_Toll_Coonagro.xlsm.
+- Mantem historico, fila e indicadores do monitor.
+
+ANTES DO PRIMEIRO USO
+--------------------
+1. Confirme que a pasta SharePoint sincronizada esta acessivel no computador.
+2. Abra o Outlook Desktop com a conta correta ja conectada.
+3. Crie no Outlook uma pasta com o nome exato XML Coonagro.
+4. Recomenda-se criar uma regra no Outlook para mover automaticamente para
+   essa pasta os e-mails da Coonagro que contenham XMLs do processo.
+5. Se preferir, mova manualmente os e-mails para a pasta XML Coonagro.
+
+RECOMENDACAO PARA A REGRA DO OUTLOOK
+-----------------------------------
+Use uma regra simples e de baixo risco, por exemplo:
+- Remetente da Coonagro ou remetentes conhecidos do fluxo.
+- Assunto contendo termos do processo ou de nota/XML.
+- Mensagens com anexo XML, quando essa condicao fizer sentido para o time.
+
+Se houver duvida, faca a regra primeiro em uma pasta de teste e valide com
+alguns e-mails antes de deixar o fluxo automatico.
+
+COMO USAR
+---------
+1. Abra XML_Monitor.exe.
+2. Deixe o Outlook aberto durante a operacao do extrator.
+3. O monitor vai procurar novos XMLs na pasta XML Coonagro.
+4. Os arquivos recebidos serao baixados e processados automaticamente.
+5. A Base_Operacional_Toll_Coonagro.xlsm sera atualizada pelo sistema.
+
+PASTAS E ARQUIVOS IMPORTANTES
+-----------------------------
+- Base_Operacional_Toll_Coonagro.xlsm: base operacional do processo.
+- XMLs_Recebidos: armazenamento dos XMLs baixados pelo monitor.
+- Exportados: saidas geradas pelo processo quando aplicavel.
+- system: arquivos internos do sistema. Nao editar nem excluir.
+
+BOAS PRATICAS
+-------------
+- Nao renomear a pasta XML Coonagro no Outlook.
+- Nao mover nem excluir arquivos da pasta system.
+- Nao deixar a pasta SharePoint sem sincronizacao.
+- Se o monitor nao encontrar a pasta do Outlook, verifique o nome exato da
+  pasta e se o Outlook esta aberto.
+
+SUPORTE BASICO
+--------------
+Se algo nao funcionar como esperado, verifique:
+- Se o Outlook esta aberto e conectado.
+- Se a pasta XML Coonagro existe no Outlook.
+- Se a pasta SharePoint esta sincronizada no computador.
+- Se a base XLSM nao esta bloqueada por algum uso indevido.
+
+=======================================================

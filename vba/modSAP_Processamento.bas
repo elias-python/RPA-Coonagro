@@ -1,10 +1,18 @@
 Option Explicit
+Option Private Module
+
+#If VBA7 Then
+    Private Declare PtrSafe Function MessageBeep Lib "user32" (ByVal wType As Long) As Long
+#Else
+    Private Declare Function MessageBeep Lib "user32" (ByVal wType As Long) As Long
+#End If
 
 ' ==============================
 ' Controle global
 ' ==============================
 Public ContadorErros As Long
 Public ContadorProcessos As Long
+Public ContadorNotasLancadas As Long
 Public Executar As Boolean
 Public Pausado As Boolean
 Public PararMacro As Boolean
@@ -13,7 +21,8 @@ Public PararMacro As Boolean
 ' Configuracao da planilha
 ' ==============================
 Public Const PLAN_SHEET As String = "Base"
-Public Const NOME_DADOS As String = "Base_Dados_Coonagro.xlsm"
+Public Const NOME_DADOS As String = "Base_Operacional_Toll_Coonagro.xlsm"
+Public Const NOME_DADOS_LEGADO As String = "Base_Dados_Coonagro.xlsm"
 
 ' Campos usados da planilha (ajuste apenas aqui)
 ' Layout gerado pelo XML Monitoring.py:
@@ -45,6 +54,20 @@ Private Type GrupoRange
     PedidoSAP As String
 End Type
 
+Private Function ResolverNomeDados(ByVal pastaBase As String) As String
+    If LenB(Dir$(pastaBase & "\" & NOME_DADOS)) > 0 Then
+        ResolverNomeDados = NOME_DADOS
+        Exit Function
+    End If
+
+    If LenB(Dir$(pastaBase & "\" & NOME_DADOS_LEGADO)) > 0 Then
+        ResolverNomeDados = NOME_DADOS_LEGADO
+        Exit Function
+    End If
+
+    ResolverNomeDados = NOME_DADOS
+End Function
+
 ' Cores de status na coluna A (conforme regra operacional)
 ' AUTCARR_OK = AZUL | ERRO = VERMELHO | CONCLUIDO = VERDE | SEM PAR = LARANJA
 
@@ -74,8 +97,8 @@ Private Function StatusPorCorLinha(ByVal cel As Range) As String
 End Function
 
 Public Sub IniciarComControle()
-    ResetEstadoExecucao
     AtualizarDashboard       ' nao recria shapes — apenas atualiza textos
+    ResetEstadoExecucao
     On Error Resume Next
     With ThisWorkbook.Worksheets(PLAN_SHEET)
         .Activate
@@ -90,6 +113,7 @@ End Sub
 Public Sub ResetEstadoExecucao()
     ContadorErros = 0
     ContadorProcessos = 0
+    ContadorNotasLancadas = 0
     Executar = True
     Pausado = False
     PararMacro = False
@@ -103,19 +127,21 @@ Public Sub IniciarProcessamentoSAP()
     Dim cursor As Long
     Dim grp As GrupoRange
     Dim caminhoArquivo As String
+    Dim nomeArquivo As String
     Dim resultado As String
 
     On Error GoTo TratarErroFatal
 
     ' Abre o arquivo de dados externo (gerado pelo XML Monitoring.py)
-    caminhoArquivo = ThisWorkbook.Path & "\" & NOME_DADOS
+    nomeArquivo = ResolverNomeDados(ThisWorkbook.Path)
+    caminhoArquivo = ThisWorkbook.Path & "\" & nomeArquivo
     abriuAgora = False
 
-    If StrComp(ThisWorkbook.Name, NOME_DADOS, vbTextCompare) = 0 Then
+    If StrComp(ThisWorkbook.Name, nomeArquivo, vbTextCompare) = 0 Then
         Set wb = ThisWorkbook
     Else
         On Error Resume Next
-        Set wb = Workbooks(NOME_DADOS)
+        Set wb = Workbooks(nomeArquivo)
         On Error GoTo TratarErroFatal
     End If
 
@@ -202,15 +228,23 @@ ContinueLoop:
 
     If PararMacro Then
         AtualizarPainelControle "Parado"
-        MsgBox "Processo interrompido pelo usuario.", vbInformation
     Else
         AtualizarPainelControle "Finalizado"
-        MsgBox "Processo finalizado.", vbInformation
     End If
 
     If Not wb Is Nothing Then
         wb.Save
         ' Arquivo permanece aberto para consulta apos execucao
+    End If
+    Executar = False
+    AtualizarDashboard
+    AtualizarContadoresUI
+    TocarSomResumoFinal
+
+    If PararMacro Then
+        MsgBox MontarMensagemFinalAutomacao(ws, True), vbInformation, "Resumo da automacao"
+    Else
+        MsgBox MontarMensagemFinalAutomacao(ws, False), vbInformation, "Resumo da automacao"
     End If
     Exit Sub
 
@@ -241,15 +275,16 @@ Private Function ProximoGrupo(ByVal ws As Worksheet, ByVal startRow As Long, ByV
 
     r = startRow
 
-    ' Processa linhas sem cor (pendentes), azuis (AUTCARR_OK — segunda passagem pendente)
-    ' ou laranja (SEM_PAR/NAO_ENCONTRADA — reprocessar apos cockpit ou impressao).
-    ' Ignora VERDE, VERMELHO e outras cores finais.
+    ' Processa linhas sem cor (pendentes), azuis (AUTCARR_OK — segunda passagem pendente),
+    ' laranja (SEM_PAR/NAO_ENCONTRADA — reprocessar apos cockpit ou impressao)
+    ' e vermelho (ERRO — reprocessar tentativa completa do grupo).
+    ' Ignora VERDE e outras cores finais.
     Dim stLinha As String
     Do While r <= lastRow
         linhaValida = Trim$(CStr(ws.Cells(r, COL_LINHA_VALIDA).Value))
         If Len(linhaValida) > 0 Then
             stLinha = StatusPorCorLinha(ws.Cells(r, COL_LINHA_VALIDA))
-            If stLinha = "" Or stLinha = "AUTCARR_OK" Or stLinha = "SEM_PAR" Then Exit Do
+            If stLinha = "" Or stLinha = "AUTCARR_OK" Or stLinha = "SEM_PAR" Or stLinha = "ERRO" Then Exit Do
         End If
         r = r + 1
     Loop
@@ -309,6 +344,7 @@ Private Function ProcessarGrupoSAP(ByVal ws As Worksheet, ByRef grp As GrupoRang
     Dim linhaPlanilha As Long
     Dim resposta As VbMsgBoxResult
     Dim msgRemessa As String
+    Dim detalheAutcarr As String
     msgRemessa = "Va ate a transacao J1B3N para efetuar a impressao da Nota de Remessa." & vbCrLf & vbCrLf & _
                  "Apos imprimir, clique em 'OK' (Feito) para o robo tentar este grupo novamente." & vbCrLf & _
                  "Clique em 'Cancelar' para PARAR a macro."
@@ -383,6 +419,9 @@ Private Function ProcessarGrupoSAP(ByVal ws As Worksheet, ByRef grp As GrupoRang
 
         .findById("wnd[1]/usr/tabsTAB_STRIP/tabpSIVA/ssubSCREEN_HEADER:SAPLALDB:3010/tblSAPLALDBSINGLE/txtRSCSEL_255-SLOW_I[1,0]").Text = grp.NfLow
         .findById("wnd[1]/usr/tabsTAB_STRIP/tabpSIVA/ssubSCREEN_HEADER:SAPLALDB:3010/tblSAPLALDBSINGLE/txtRSCSEL_255-SLOW_I[1,1]").Text = grp.NfHigh
+        On Error Resume Next
+        .findById("wnd[0]/usr/radP_PEN").Select
+        On Error GoTo TratarErroGrupo
         .findById("wnd[0]/tbar[1]/btn[8]").press
         .findById("wnd[0]/tbar[1]/btn[8]").press
 
@@ -390,10 +429,15 @@ Private Function ProcessarGrupoSAP(ByVal ws As Worksheet, ByRef grp As GrupoRang
             If InStr(1, CStr(.Children(1).Text), "Informacao", vbTextCompare) > 0 _
                 Or InStr(1, CStr(.Children(1).Text), "Informação", vbTextCompare) > 0 Then
                 .Children(1).sendVKey 0
-                ' Nao encontrada: pode ser que o Cockpit ainda nao foi executado para este grupo.
-                ' Marca LARANJA (atencao manual) em vez de VERDE.
-                AtualizarStatusFaixa ws, grp.StartRow, grp.EndRow, "NAO ENCONTRADA NO SAP"
-                ContadorErros = ContadorErros + 1
+                If AbrirGrupoEmNotasProcessadas(session) Then
+                    AtualizarStatusFaixa ws, grp.StartRow, grp.EndRow, "CONCLUIDO"
+                    grp.StatusAtual = "CONCLUIDO"
+                    RegistrarGrupoConcluido grp
+                Else
+                    ' Nao encontrada: pode ser que o Cockpit ainda nao foi executado para este grupo.
+                    ' Marca LARANJA para indicar pendencia de Cockpit/manual, sem tratar como erro.
+                    AtualizarStatusFaixa ws, grp.StartRow, grp.EndRow, "PENDENTE COCKPIT"
+                End If
                 GoTo FinalizaGrupo
             End If
         End If
@@ -414,6 +458,12 @@ Private Function ProcessarGrupoSAP(ByVal ws As Worksheet, ByRef grp As GrupoRang
 
         ' Passagem 1
         If UCase$(grp.StatusAtual) <> "AUTCARR_OK" Then
+            If GridIndicaAutcarrJaPreparado(sapGrid, rowCount, grp.PedidoSAP, grp.Emissao) Then
+                AtualizarStatusFaixa ws, grp.StartRow, grp.EndRow, "AUTCARR_OK"
+                grp.StatusAtual = "AUTCARR_OK"
+                GoTo ReabrirGrupoParaNFR
+            End If
+
             For i = 0 To rowCount - 1
                 If Trim$(CStr(sapGrid.GetCellValue(i, "BSTNR"))) <> "" Then sapGrid.modifyCell i, "BSTNR", ""
                 If Trim$(CStr(sapGrid.GetCellValue(i, "EBELP"))) <> "" Then sapGrid.modifyCell i, "EBELP", ""
@@ -431,8 +481,13 @@ Private Function ProcessarGrupoSAP(ByVal ws As Worksheet, ByRef grp As GrupoRang
             sapGrid.currentCellColumn = ""
             sapGrid.selectedRows = "0"
 
-            If Not RunAUTCARR(session, sapGrid, 3) Then
-                AtualizarStatusFaixa ws, grp.StartRow, grp.EndRow, "Erro AUTCARR"
+            detalheAutcarr = ""
+            If Not RunAUTCARR(session, sapGrid, 3, detalheAutcarr) Then
+                If Len(Trim$(detalheAutcarr)) > 0 Then
+                    AtualizarStatusFaixa ws, grp.StartRow, grp.EndRow, "Erro AUTCARR: " & detalheAutcarr
+                Else
+                    AtualizarStatusFaixa ws, grp.StartRow, grp.EndRow, "Erro AUTCARR"
+                End If
                 ContadorErros = ContadorErros + 1
                 GoTo FinalizaGrupo
             End If
@@ -441,6 +496,7 @@ Private Function ProcessarGrupoSAP(ByVal ws As Worksheet, ByRef grp As GrupoRang
             AtualizarStatusFaixa ws, grp.StartRow, grp.EndRow, "AUTCARR_OK"
             grp.StatusAtual = "AUTCARR_OK"
 
+ReabrirGrupoParaNFR:
             Application.Wait Now + TimeValue("0:00:03")
             .findById("wnd[0]").maximize
             .findById("wnd[0]/tbar[0]/okcd").Text = "/nzt_mm_94n"
@@ -457,6 +513,9 @@ Private Function ProcessarGrupoSAP(ByVal ws As Worksheet, ByRef grp As GrupoRang
             .findById("wnd[0]/usr/btn%_S_NFNUM_%_APP_%-VALU_PUSH").press
             .findById("wnd[1]/usr/tabsTAB_STRIP/tabpSIVA/ssubSCREEN_HEADER:SAPLALDB:3010/tblSAPLALDBSINGLE/txtRSCSEL_255-SLOW_I[1,0]").Text = grp.NfLow
             .findById("wnd[1]/usr/tabsTAB_STRIP/tabpSIVA/ssubSCREEN_HEADER:SAPLALDB:3010/tblSAPLALDBSINGLE/txtRSCSEL_255-SLOW_I[1,1]").Text = grp.NfHigh
+            On Error Resume Next
+            .findById("wnd[0]/usr/radP_PEN").Select
+            On Error GoTo TratarErroGrupo
             .findById("wnd[0]/tbar[1]/btn[8]").press
             .findById("wnd[0]/tbar[1]/btn[8]").press
 
@@ -465,8 +524,13 @@ Private Function ProcessarGrupoSAP(ByVal ws As Worksheet, ByRef grp As GrupoRang
                 If InStr(1, CStr(.Children(1).Text), "Informacao", vbTextCompare) > 0 _
                     Or InStr(1, CStr(.Children(1).Text), "Informação", vbTextCompare) > 0 Then
                     .Children(1).sendVKey 0
+                    If AbrirGrupoEmNotasProcessadas(session) Then
+                        AtualizarStatusFaixa ws, grp.StartRow, grp.EndRow, "CONCLUIDO"
+                        grp.StatusAtual = "CONCLUIDO"
+                        RegistrarGrupoConcluido grp
+                    End If
                     ' AUTCARR_OK ja gravado — NFR nao realizado pois NF sumiu apos re-navegacao
-                    ' Mantém AZUL (nao sobrescreve) para reprocessar depois
+                    ' Se tambem nao existir em processadas, mantem AZUL para reprocessar depois.
                     GoTo FinalizaGrupo
                 End If
             End If
@@ -561,7 +625,7 @@ Private Function ProcessarGrupoSAP(ByVal ws As Worksheet, ByRef grp As GrupoRang
         .findById("wnd[1]/usr/btnSPOP-OPTION1").press
 
         AtualizarStatusFaixa ws, grp.StartRow, grp.EndRow, "OK"
-        ContadorProcessos = ContadorProcessos + 1
+        RegistrarGrupoConcluido grp
     End With
 
 FinalizaGrupo:
@@ -579,10 +643,12 @@ TratarErroGrupo:
     Resume FinalizaGrupo
 End Function
 
-Private Function RunAUTCARR(ByVal session As Object, ByVal sapGrid As Object, ByVal maxTentativas As Integer) As Boolean
+Private Function RunAUTCARR(ByVal session As Object, ByVal sapGrid As Object, ByVal maxTentativas As Integer, ByRef detalheFalha As String) As Boolean
     Dim tentativa As Integer
+    Dim msgSap As String
 
     RunAUTCARR = False
+    detalheFalha = ""
 
     For tentativa = 1 To maxTentativas
         On Error Resume Next
@@ -598,9 +664,151 @@ Private Function RunAUTCARR(ByVal session As Object, ByVal sapGrid As Object, By
             On Error GoTo 0
             Exit Function
         End If
+
+        Err.Clear
+        msgSap = LerMensagemSAP(session)
+        detalheFalha = msgSap
+
+        If MensagemIndicaAutcarrJaExecutado(msgSap) Then
+            FecharJanelaSecundariaSAP session
+            RunAUTCARR = True
+            On Error GoTo 0
+            Exit Function
+        End If
+
+        FecharJanelaSecundariaSAP session
         On Error GoTo 0
     Next tentativa
+
+    If Len(Trim$(detalheFalha)) = 0 Then detalheFalha = "sem retorno do SAP"
 End Function
+
+Private Function GridIndicaAutcarrJaPreparado(ByVal sapGrid As Object, ByVal rowCount As Long, ByVal pedidoSAP As String, ByVal emissao As String) As Boolean
+    Dim pedidoAtual As String
+    Dim itemPedido As String
+    Dim dtLanc As String
+    Dim quantidadeGrid As String
+    Dim pesoBal As String
+    Dim i As Long
+    Dim linhasComPeso As Long
+
+    On Error GoTo FalhaDeteccao
+
+    If rowCount <= 0 Then Exit Function
+
+    pedidoAtual = Trim$(CStr(sapGrid.GetCellValue(0, "BSTNR")))
+    itemPedido = Trim$(CStr(sapGrid.GetCellValue(0, "EBELP")))
+    dtLanc = ApenasDigitos(CStr(sapGrid.GetCellValue(0, "DT_LANC")))
+
+    If Len(pedidoAtual) = 0 Or Len(itemPedido) = 0 Then Exit Function
+    If Len(Trim$(pedidoSAP)) > 0 And StrComp(pedidoAtual, Trim$(pedidoSAP), vbTextCompare) <> 0 Then Exit Function
+    If itemPedido <> "10" And itemPedido <> "00010" Then Exit Function
+
+    If Len(Trim$(emissao)) > 0 Then
+        If dtLanc <> ApenasDigitos(ToDDMMYYYY(emissao)) Then Exit Function
+    End If
+
+    For i = 0 To rowCount - 1
+        quantidadeGrid = NormalizarNumeroSAP(CStr(sapGrid.GetCellValue(i, "MENGE")))
+        pesoBal = NormalizarNumeroSAP(CStr(sapGrid.GetCellValue(i, "PESO_BAL")))
+
+        If Len(pesoBal) > 0 Then
+            linhasComPeso = linhasComPeso + 1
+            If quantidadeGrid <> pesoBal Then Exit Function
+        End If
+    Next i
+
+    GridIndicaAutcarrJaPreparado = (linhasComPeso = rowCount)
+    Exit Function
+
+FalhaDeteccao:
+    GridIndicaAutcarrJaPreparado = False
+End Function
+
+Private Function ApenasDigitos(ByVal texto As String) As String
+    Dim i As Long
+    Dim ch As String
+
+    For i = 1 To Len(texto)
+        ch = Mid$(texto, i, 1)
+        If ch >= "0" And ch <= "9" Then
+            ApenasDigitos = ApenasDigitos & ch
+        End If
+    Next i
+End Function
+
+Private Function NormalizarNumeroSAP(ByVal texto As String) As String
+    Dim valor As String
+
+    valor = Trim$(CStr(texto))
+    valor = Replace(valor, ".", "")
+    valor = Replace(valor, ",", ".")
+
+    If Len(valor) = 0 Then
+        NormalizarNumeroSAP = ""
+    ElseIf IsNumeric(valor) Then
+        NormalizarNumeroSAP = Format$(CDbl(valor), "0.000")
+    Else
+        NormalizarNumeroSAP = valor
+    End If
+End Function
+
+Private Function LerMensagemSAP(ByVal session As Object) As String
+    Dim texto As String
+
+    texto = ""
+
+    On Error Resume Next
+    texto = Trim$(CStr(session.findById("wnd[0]/sbar").Text))
+
+    If Len(texto) = 0 Then
+        If Not session.findById("wnd[1]", False) Is Nothing Then
+            texto = Trim$(CStr(session.findById("wnd[1]").MessageText))
+            If Len(texto) = 0 Then texto = Trim$(CStr(session.findById("wnd[1]/usr/txtMESSAGE").Text))
+            If Len(texto) = 0 Then texto = Trim$(CStr(session.findById("wnd[1]").Text))
+            If Len(texto) = 0 Then texto = Trim$(CStr(session.findById("wnd[1]/usr").Children(0).Text))
+        End If
+    End If
+    On Error GoTo 0
+
+    LerMensagemSAP = texto
+End Function
+
+Private Function MensagemIndicaAutcarrJaExecutado(ByVal mensagem As String) As Boolean
+    Dim msg As String
+    Dim temContexto As Boolean
+    Dim indicaReprocesso As Boolean
+
+    msg = NormalizeText(CStr(mensagem))
+    If Len(msg) = 0 Then Exit Function
+
+    temContexto = (InStr(1, msg, "AUTCARR", vbTextCompare) > 0 _
+        Or InStr(1, msg, "REMESSA", vbTextCompare) > 0 _
+        Or InStr(1, msg, "NOTA", vbTextCompare) > 0 _
+        Or InStr(1, msg, "DOCUMENTO", vbTextCompare) > 0)
+
+    indicaReprocesso = ((InStr(1, msg, "JA ", vbTextCompare) > 0 Or Left$(msg, 2) = "JA") _
+        And (InStr(1, msg, "PROCESSAD", vbTextCompare) > 0 _
+        Or InStr(1, msg, "EXECUTAD", vbTextCompare) > 0 _
+        Or InStr(1, msg, "REALIZAD", vbTextCompare) > 0 _
+        Or InStr(1, msg, "GERAD", vbTextCompare) > 0 _
+        Or InStr(1, msg, "CRIAD", vbTextCompare) > 0 _
+        Or InStr(1, msg, "CONTABILIZ", vbTextCompare) > 0 _
+        Or InStr(1, msg, "EXIST", vbTextCompare) > 0))
+
+    MensagemIndicaAutcarrJaExecutado = (temContexto And indicaReprocesso)
+End Function
+
+Private Sub FecharJanelaSecundariaSAP(ByVal session As Object)
+    On Error Resume Next
+    If Not session.findById("wnd[1]", False) Is Nothing Then
+        session.findById("wnd[1]").sendVKey 0
+        If Not session.findById("wnd[1]", False) Is Nothing Then
+            session.findById("wnd[1]/tbar[0]/btn[0]").press
+        End If
+    End If
+    On Error GoTo 0
+End Sub
 
 Private Function PopupRemessaAberto(ByVal session As Object) As Boolean
     On Error Resume Next
@@ -610,6 +818,28 @@ Private Function PopupRemessaAberto(ByVal session As Object) As Boolean
         PopupRemessaAberto = (InStr(1, CStr(session.findById("wnd[2]").Text), "Nota Fiscal de Remessa", vbTextCompare) > 0)
     End If
     On Error GoTo 0
+End Function
+
+Private Function AbrirGrupoEmNotasProcessadas(ByVal session As Object) As Boolean
+    On Error GoTo FalhaBusca
+
+    session.findById("wnd[0]/usr/radP_PRC").Select
+    session.findById("wnd[0]/tbar[1]/btn[8]").press
+
+    If session.Children.Count > 1 Then
+        If InStr(1, CStr(session.Children(1).Text), "Informacao", vbTextCompare) > 0 _
+            Or InStr(1, CStr(session.Children(1).Text), "Informação", vbTextCompare) > 0 Then
+            session.Children(1).sendVKey 0
+            AbrirGrupoEmNotasProcessadas = False
+            Exit Function
+        End If
+    End If
+
+    AbrirGrupoEmNotasProcessadas = Not session.findById("wnd[0]/usr/shell/shellcont[1]/shell", False) Is Nothing
+    Exit Function
+
+FalhaBusca:
+    AbrirGrupoEmNotasProcessadas = False
 End Function
 
 Private Sub AtualizarStatusFaixa(ByVal ws As Worksheet, ByVal startRow As Long, ByVal endRow As Long, ByVal statusText As String)
@@ -630,7 +860,8 @@ Private Sub AtualizarStatusFaixa(ByVal ws As Worksheet, ByVal startRow As Long, 
             corFonte = RGB(255, 255, 255)
         Case Else
             If InStr(1, su, "NAO MAPEADO") > 0 Or InStr(1, su, "SEM PAR") > 0 _
-                Or InStr(1, su, "NAO ENCONTRADO") > 0 Or InStr(1, su, "NAO ENCONTRADA") > 0 Then
+                Or InStr(1, su, "NAO ENCONTRADO") > 0 Or InStr(1, su, "NAO ENCONTRADA") > 0 _
+                Or InStr(1, su, "PENDENTE COCKPIT") > 0 Then
                 corFundo = RGB(255, 152, 0)  ' laranja
                 corFonte = RGB(255, 255, 255)
             ElseIf InStr(1, su, "ERRO") > 0 Then
@@ -676,8 +907,88 @@ Public Sub AtualizarPainelControle(ByVal statusTxt As String)
 End Sub
 
 Public Sub AtualizarContadoresUI()
-    AtualizarContadores ContadorErros, ContadorProcessos
+    AtualizarContadores ContadorErros, ContadorProcessos, ContadorNotasLancadas
 End Sub
+
+Private Sub TocarSomResumoFinal()
+    Const MB_ICONASTERISK As Long = &H40&
+    On Error Resume Next
+    MessageBeep MB_ICONASTERISK
+    On Error GoTo 0
+End Sub
+
+Private Sub RegistrarGrupoConcluido(ByRef grp As GrupoRange)
+    ContadorProcessos = ContadorProcessos + 1
+    ContadorNotasLancadas = ContadorNotasLancadas + ContarNotasGrupo(grp)
+End Sub
+
+Private Function ContarNotasGrupo(ByRef grp As GrupoRange) As Long
+    Dim nfLow As String
+    Dim nfHigh As String
+
+    nfLow = Trim$(grp.NfLow)
+    nfHigh = Trim$(grp.NfHigh)
+
+    If Len(nfLow) > 0 Then ContarNotasGrupo = 1
+    If Len(nfHigh) > 0 And StrComp(nfHigh, nfLow, vbTextCompare) <> 0 Then
+        ContarNotasGrupo = ContarNotasGrupo + 1
+    End If
+End Function
+
+Private Sub ContarResumoNotasExecucao(ByVal ws As Worksheet, ByRef notasPendentes As Long, ByRef notasErro As Long)
+    Dim ultima As Long
+    Dim r As Long
+    Dim nf As String
+    Dim st As String
+    Dim dPend As Object
+    Dim dErr As Object
+
+    Set dPend = CreateObject("Scripting.Dictionary")
+    Set dErr = CreateObject("Scripting.Dictionary")
+
+    ultima = ws.Cells(ws.Rows.Count, COL_LINHA_VALIDA).End(xlUp).Row
+    If ultima < 3 Then Exit Sub
+
+    For r = 3 To ultima
+        nf = Trim$(CStr(ws.Cells(r, COL_LINHA_VALIDA).Value))
+        If Len(nf) = 0 Then GoTo Prox
+
+        st = UCase$(StatusPorCorLinha(ws.Cells(r, COL_LINHA_VALIDA)))
+        Select Case st
+            Case "", "SEM_PAR"
+                If Not dPend.Exists(nf) Then dPend.Add nf, 1
+            Case "ERRO"
+                If Not dErr.Exists(nf) Then dErr.Add nf, 1
+        End Select
+Prox:
+    Next r
+
+    notasPendentes = dPend.Count
+    notasErro = dErr.Count
+End Sub
+
+Private Function MontarMensagemFinalAutomacao(ByVal ws As Worksheet, ByVal foiInterrompida As Boolean) As String
+    Dim notasPendentes As Long
+    Dim notasErro As Long
+    Dim totalDia As Long
+    Dim titulo As String
+
+    ContarResumoNotasExecucao ws, notasPendentes, notasErro
+    totalDia = TotalNotasLancadasDia(ws)
+
+    If foiInterrompida Then
+        titulo = "Automacao interrompida pelo usuario."
+    Else
+        titulo = "Automacao finalizada."
+    End If
+
+    MontarMensagemFinalAutomacao = titulo & vbCrLf & vbCrLf & _
+        "Grupos lancados: " & ContadorProcessos & vbCrLf & _
+        "Notas lancadas: " & ContadorNotasLancadas & vbCrLf & _
+        "Pendentes: " & notasPendentes & vbCrLf & _
+        "Erros: " & notasErro & vbCrLf & _
+        "Total lancadas no dia: " & totalDia
+End Function
 
 Private Function NormalizeText(ByVal value As String) As String
     Dim txt As String
@@ -717,6 +1028,11 @@ End Function
 
 Private Function PedidoPorXProd(ByVal xprodNormalizado As String) As String
     ' Pedidos NOVOS (obrigatorio usar estes)
+    If InStr(1, xprodNormalizado, "INDUSTRIALIZACAO GRANULACAO", vbTextCompare) > 0 Then
+        PedidoPorXProd = "4510000399"
+        Exit Function
+    End If
+
     If InStr(1, xprodNormalizado, "INDUSTRIALIZACAO MISTURA SACARIA", vbTextCompare) > 0 Then
         PedidoPorXProd = "4510000397"
         Exit Function
