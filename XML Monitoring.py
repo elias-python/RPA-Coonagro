@@ -2638,6 +2638,11 @@ def _atualizacao_bloqueada_por_status_sap(wb_com) -> bool:
 
 
 EXCEL_UI_PROTECTION_PASSWORD = "RPA_Coonagro_UI"
+EXCEL_NUMBER_FORMATS_BY_HEADER = {
+    "Vlr. Unitário": ("#,##0.000000", "#.##0,000000"),
+    "Vlr.Total Item": ("#,##0.00", "#.##0,00"),
+    "Vlr.Total (NF)": ("#,##0.00", "#.##0,00"),
+}
 
 
 def _desproteger_base_operacional_com(ws_com):
@@ -2682,6 +2687,28 @@ def _valor_excel_limpo(valor, como_texto: bool = False):
         return texto
 
     return str(valor) if como_texto else valor
+
+
+def _aplicar_formatos_base_com(ws_com, header_names, first_row: int, last_row: int):
+    if last_row < first_row:
+        return
+
+    for idx, col_name in enumerate(header_names, start=1):
+        formatos = EXCEL_NUMBER_FORMATS_BY_HEADER.get(str(col_name).strip())
+        if not formatos:
+            continue
+
+        rng = ws_com.Range(ws_com.Cells(first_row, idx), ws_com.Cells(last_row, idx))
+
+        try:
+            rng.NumberFormat = formatos[0]
+        except Exception:
+            pass
+
+        try:
+            rng.NumberFormatLocal = formatos[1]
+        except Exception:
+            pass
 
 
 def _atualizar_via_com(wb_com, df_out):
@@ -2826,6 +2853,13 @@ def _atualizar_via_com(wb_com, df_out):
                 ws_com.Cells(data_start_row, 1),
                 ws_com.Cells(data_start_row + n_rows - 1, n_cols),
             ).Value = rows_data
+
+            _aplicar_formatos_base_com(
+                ws_com,
+                df_out.columns,
+                data_start_row,
+                data_start_row + n_rows - 1,
+            )
 
             # Re-aplica cores de status na coluna A
             # Propaga a cor para TODAS as linhas do grupo (igual ao VBA).

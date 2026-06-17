@@ -25,6 +25,7 @@ Private Const SHP_BTN_EXPORT_XLSX As String = "ctl_btn_export_xlsx"
 Private Const SHP_BTN_EXPORT_PDF  As String = "ctl_btn_export_pdf"
 Private Const SHP_BTN_CLEAR_CONCLUIDOS As String = "ctl_btn_clear_concluidos"
 Private Const SHP_BTN_RELOAD   As String = "ctl_btn_reload"
+Private Const SHP_BTN_SETTINGS As String = "ctl_btn_settings"
 Private Const UI_PROTECTION_PASSWORD As String = "RPA_Coonagro_UI"
 Private Const MAINTENANCE_SHORTCUT_OPEN As String = "^+m"
 Private Const MAINTENANCE_SHORTCUT_OPEN_ALT As String = "^+M"
@@ -43,7 +44,10 @@ Public Sub Auto_Open()
     RemoverAbaDashboardLegada
     Dim ws As Worksheet
     Dim wsConcluidos As Worksheet
+    Dim wsConfig As Worksheet
     Set ws = GetBaseSheet()
+    Set wsConfig = GetConfigPedidosSheet(True)
+    If Not wsConfig Is Nothing Then PrepararAbaConfigPedidos wsConfig
     If Not ws Is Nothing Then
         EnsureTopo ws
         ws.Activate
@@ -60,6 +64,7 @@ End Sub
 Public Sub InicializarDashboard()
     Dim ws As Worksheet
     Dim wsConcluidos As Worksheet
+    Dim wsConfig As Worksheet
 
     On Error GoTo SaidaSegura
     Application.ScreenUpdating = False
@@ -73,6 +78,8 @@ Public Sub InicializarDashboard()
     End If
 
     RemoverAbaDashboardLegada
+    Set wsConfig = GetConfigPedidosSheet(True)
+    If Not wsConfig Is Nothing Then PrepararAbaConfigPedidos wsConfig
     Set wsConcluidos = GetConcluidosSheet(True)
     If Not wsConcluidos Is Nothing Then EnsureTopoConcluidos wsConcluidos
     EnsureTopo ws
@@ -87,6 +94,35 @@ End Sub
 Public Sub Auto_Close()
     LimparAtalhosManutencao
     RestaurarInterfaceExcel
+End Sub
+
+Public Sub AbrirConfiguracaoPedidos()
+    Dim ws As Worksheet
+    Dim conseguiuAbrir As Boolean
+
+    On Error GoTo SaidaSegura
+    Application.ScreenUpdating = False
+    PrepararModoEdicaoInterno
+
+    Set ws = GetConfigPedidosSheet(True)
+    If ws Is Nothing Then GoTo SaidaSegura
+
+    PrepararAbaConfigPedidos ws
+    conseguiuAbrir = True
+
+SaidaSegura:
+    On Error Resume Next
+    AplicarModoOperacao
+    If conseguiuAbrir Then
+        ws.Activate
+        ws.Range("B5").Select
+    End If
+    Application.ScreenUpdating = True
+    On Error GoTo 0
+
+    If Not conseguiuAbrir Then
+        MsgBox "Nao foi possivel abrir a configuracao de pedidos.", vbExclamation, "Configuracao de pedidos"
+    End If
 End Sub
 
 Public Sub AtivarModoOperacional()
@@ -393,6 +429,82 @@ Private Function GetConcluidosSheet(Optional ByVal createIfMissing As Boolean = 
         On Error GoTo 0
     End If
 End Function
+
+Private Function GetConfigPedidosSheet(Optional ByVal createIfMissing As Boolean = False) As Worksheet
+    On Error Resume Next
+    Set GetConfigPedidosSheet = ThisWorkbook.Worksheets(CONFIG_SHEET_PEDIDOS)
+    On Error GoTo 0
+
+    If GetConfigPedidosSheet Is Nothing And createIfMissing Then
+        On Error Resume Next
+        Set GetConfigPedidosSheet = ThisWorkbook.Worksheets.Add(After:=ThisWorkbook.Worksheets(ThisWorkbook.Worksheets.Count))
+        If Not GetConfigPedidosSheet Is Nothing Then
+            GetConfigPedidosSheet.Name = CONFIG_SHEET_PEDIDOS
+        End If
+        On Error GoTo 0
+    End If
+End Function
+
+Private Sub PrepararAbaConfigPedidos(ByVal ws As Worksheet)
+    ws.Visible = xlSheetVisible
+    ws.Tab.Color = RGB(96, 125, 139)
+    ws.Cells.Locked = True
+
+    ws.Columns("A").ColumnWidth = 36
+    ws.Columns("B").ColumnWidth = 18
+
+    With ws.Range("A1:B1")
+        .Interior.Color = RGB(28, 50, 84)
+        .Font.Bold = True
+        .Font.Size = 13
+        .Font.Color = RGB(255, 255, 255)
+    End With
+    ws.Range("A1").Value = "Configuracao de pedidos SAP"
+    ws.Range("B1").ClearContents
+    ws.Rows(1).RowHeight = 24
+
+    With ws.Range("A2:B2")
+        .Interior.Color = RGB(232, 239, 247)
+        .Font.Color = RGB(56, 84, 130)
+        .Font.Italic = True
+    End With
+    ws.Range("A2").Value = "Altere somente a coluna Pedido SAP. A proxima execucao ja usa o novo valor."
+    ws.Range("B2").ClearContents
+
+    With ws.Range("A4:B4")
+        .Font.Bold = True
+        .Interior.Color = RGB(209, 232, 255)
+    End With
+    ws.Range("A4").Value = "Tipo de industrializacao"
+    ws.Range("B4").Value = "Pedido SAP"
+
+    ws.Range("B5:B8").NumberFormat = "@"
+    GarantirLinhaConfigPedido ws, 5, TIPO_INDUSTRIALIZACAO_GRANULACAO
+    GarantirLinhaConfigPedido ws, 6, TIPO_INDUSTRIALIZACAO_MISTURA_SACARIA
+    GarantirLinhaConfigPedido ws, 7, TIPO_INDUSTRIALIZACAO_MISTURA_FOSFATADO
+    GarantirLinhaConfigPedido ws, 8, TIPO_INDUSTRIALIZACAO_MISTURA_NITROGENADO
+
+    With ws.Range("A4:B8")
+        .Borders(xlEdgeLeft).LineStyle = xlContinuous
+        .Borders(xlEdgeRight).LineStyle = xlContinuous
+        .Borders(xlEdgeTop).LineStyle = xlContinuous
+        .Borders(xlEdgeBottom).LineStyle = xlContinuous
+        .Borders(xlInsideHorizontal).LineStyle = xlContinuous
+        .Borders(xlInsideVertical).LineStyle = xlContinuous
+    End With
+
+    ws.Range("B5:B8").Locked = False
+    ws.Range("B5:B8").Interior.Color = RGB(255, 249, 196)
+    ws.Range("A10").Value = "Dica: altere apenas a coluna Pedido SAP e mantenha os tipos fixos."
+    ws.Range("A10").Font.Color = RGB(96, 96, 96)
+End Sub
+
+Private Sub GarantirLinhaConfigPedido(ByVal ws As Worksheet, ByVal linha As Long, ByVal tipoIndustrializacao As String)
+    ws.Cells(linha, 1).Value = tipoIndustrializacao
+    If Len(Trim$(CStr(ws.Cells(linha, 2).Text))) = 0 Then
+        ws.Cells(linha, 2).Value = PedidoPadraoPorTipo(tipoIndustrializacao)
+    End If
+End Sub
 
 Private Function NomeAbaConcluidos() As String
     NomeAbaConcluidos = "Conclu" & ChrW(237) & "dos"
@@ -724,10 +836,11 @@ End Sub
 
 Private Sub EnsureTopo(ByVal ws As Worksheet)
     AjustarControleLegadoExportacaoBase ws
+    RemoverShapeSeExistir ws, SHP_BTN_SETTINGS
 
     If Not PainelBaseIncompleto(ws) Then Exit Sub
 
-    GarantirCardBase ws, SHP_BG, 4, 4, 1508, 34, "", RGB(14, 26, 44), RGB(230, 240, 255), ""
+    GarantirCardBase ws, SHP_BG, 4, 4, 1610, 34, "", RGB(14, 26, 44), RGB(230, 240, 255), ""
     GarantirCardBase ws, SHP_INFO_UPDATED, 10, 8, 220, 26, "Atualizado: -", RGB(28, 50, 84), RGB(209, 232, 255), ""
     GarantirCardBase ws, SHP_INFO_STATUS, 240, 8, 300, 26, "Status SAP: aguardando", RGB(28, 50, 84), RGB(205, 218, 235), ""
     GarantirCardBase ws, SHP_INFO_SUMMARY, 550, 8, 310, 26, "Total NF: - | Pend: - | OK: - | Erros: -", RGB(28, 50, 84), RGB(232, 239, 247), ""
@@ -753,6 +866,7 @@ Private Sub EnsureTopoConcluidos(ByVal ws As Worksheet)
     RemoverShapeSeExistir ws, SHP_BTN_REFRESH
     RemoverShapeSeExistir ws, SHP_BTN_COCKPIT
     RemoverShapeSeExistir ws, SHP_BTN_RELOAD
+    RemoverShapeSeExistir ws, SHP_BTN_SETTINGS
 
     GarantirCardConcluidos ws, SHP_BTN_EXPORT_XLSX, 1352, 8, 84, 26, ChrW(8595) & " Excel", RGB(67, 160, 71), RGB(255, 255, 255), "ExportarExcel"
     GarantirCardConcluidos ws, SHP_BTN_EXPORT_PDF, 1442, 8, 54, 26, "PDF", RGB(56, 142, 60), RGB(255, 255, 255), "ExportarPDF"

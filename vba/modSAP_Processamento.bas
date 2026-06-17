@@ -23,6 +23,13 @@ Public PararMacro As Boolean
 Public Const PLAN_SHEET As String = "Base"
 Public Const NOME_DADOS As String = "Base_Operacional_Toll_Coonagro.xlsm"
 Public Const NOME_DADOS_LEGADO As String = "Base_Dados_Coonagro.xlsm"
+Public Const CONFIG_SHEET_PEDIDOS As String = "Config Pedidos"
+Public Const TIPO_INDUSTRIALIZACAO_GRANULACAO As String = "Industrializacao Granulacao"
+Public Const TIPO_INDUSTRIALIZACAO_MISTURA_SACARIA As String = "Industrializacao Mistura Sacaria"
+Public Const TIPO_INDUSTRIALIZACAO_MISTURA_FOSFATADO As String = "Industrializacao Mistura Fosfatado"
+Public Const TIPO_INDUSTRIALIZACAO_MISTURA_NITROGENADO As String = "Industrializacao Mistura Nitrogenado"
+
+Private Const CONFIG_PEDIDOS_FIRST_ROW As Long = 5
 
 ' Campos usados da planilha (ajuste apenas aqui)
 ' Layout gerado pelo XML Monitoring.py:
@@ -1042,30 +1049,91 @@ Private Function NormalizeText(ByVal value As String) As String
     NormalizeText = txt
 End Function
 
-Private Function PedidoPorXProd(ByVal xprodNormalizado As String) As String
-    ' Pedidos NOVOS (obrigatorio usar estes)
+Private Function TipoIndustrializacaoPorXProd(ByVal xprodNormalizado As String) As String
     If InStr(1, xprodNormalizado, "INDUSTRIALIZACAO GRANULACAO", vbTextCompare) > 0 Then
-        PedidoPorXProd = "4510000399"
+        TipoIndustrializacaoPorXProd = TIPO_INDUSTRIALIZACAO_GRANULACAO
         Exit Function
     End If
 
     If InStr(1, xprodNormalizado, "INDUSTRIALIZACAO MISTURA SACARIA", vbTextCompare) > 0 Then
-        PedidoPorXProd = "4510000397"
+        TipoIndustrializacaoPorXProd = TIPO_INDUSTRIALIZACAO_MISTURA_SACARIA
         Exit Function
     End If
 
     If InStr(1, xprodNormalizado, "INDUSTRIALIZACAO MISTURA FOSFATADO", vbTextCompare) > 0 Then
-        PedidoPorXProd = "4510000395"
+        TipoIndustrializacaoPorXProd = TIPO_INDUSTRIALIZACAO_MISTURA_FOSFATADO
         Exit Function
     End If
 
     If InStr(1, xprodNormalizado, "INDUSTRIALIZACAO MISTURA NITROGENADO", vbTextCompare) > 0 Then
-        PedidoPorXProd = "4510000396"
+        TipoIndustrializacaoPorXProd = TIPO_INDUSTRIALIZACAO_MISTURA_NITROGENADO
+    End If
+End Function
+
+Public Function PedidoPadraoPorTipo(ByVal tipoIndustrializacao As String) As String
+    Dim tipoNormalizado As String
+
+    tipoNormalizado = NormalizeText(tipoIndustrializacao)
+
+    If tipoNormalizado = NormalizeText(TIPO_INDUSTRIALIZACAO_GRANULACAO) Then
+        PedidoPadraoPorTipo = "4510000399"
         Exit Function
     End If
 
-    ' Sem fallback para pedidos antigos.
-    PedidoPorXProd = ""
+    If tipoNormalizado = NormalizeText(TIPO_INDUSTRIALIZACAO_MISTURA_SACARIA) Then
+        PedidoPadraoPorTipo = "4510000397"
+        Exit Function
+    End If
+
+    If tipoNormalizado = NormalizeText(TIPO_INDUSTRIALIZACAO_MISTURA_FOSFATADO) Then
+        PedidoPadraoPorTipo = "4510000395"
+        Exit Function
+    End If
+
+    If tipoNormalizado = NormalizeText(TIPO_INDUSTRIALIZACAO_MISTURA_NITROGENADO) Then
+        PedidoPadraoPorTipo = "4510000396"
+    End If
+End Function
+
+Public Function PedidoConfiguradoPorTipo(ByVal tipoIndustrializacao As String) As String
+    Dim ws As Worksheet
+    Dim linha As Long
+    Dim ultimaLinha As Long
+    Dim tipoNormalizado As String
+    Dim tipoLinha As String
+    Dim pedidoTexto As String
+
+    tipoNormalizado = NormalizeText(tipoIndustrializacao)
+
+    On Error Resume Next
+    Set ws = ThisWorkbook.Worksheets(CONFIG_SHEET_PEDIDOS)
+    On Error GoTo 0
+
+    If Not ws Is Nothing Then
+        ultimaLinha = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+        For linha = CONFIG_PEDIDOS_FIRST_ROW To ultimaLinha
+            tipoLinha = NormalizeText(CStr(ws.Cells(linha, 1).Value))
+            If Len(tipoLinha) > 0 And StrComp(tipoLinha, tipoNormalizado, vbTextCompare) = 0 Then
+                pedidoTexto = ApenasDigitos(CStr(ws.Cells(linha, 2).Text))
+                If Len(pedidoTexto) > 0 Then
+                    PedidoConfiguradoPorTipo = pedidoTexto
+                    Exit Function
+                End If
+                Exit For
+            End If
+        Next linha
+    End If
+
+    PedidoConfiguradoPorTipo = PedidoPadraoPorTipo(tipoIndustrializacao)
+End Function
+
+Private Function PedidoPorXProd(ByVal xprodNormalizado As String) As String
+    Dim tipoIndustrializacao As String
+
+    tipoIndustrializacao = TipoIndustrializacaoPorXProd(xprodNormalizado)
+    If Len(tipoIndustrializacao) = 0 Then Exit Function
+
+    PedidoPorXProd = PedidoConfiguradoPorTipo(tipoIndustrializacao)
 End Function
 
 Private Function SAPEstaAberto() As Boolean
